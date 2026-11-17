@@ -168,6 +168,21 @@ function collectFiles(base, relative = "", out = []) {
   return out;
 }
 function addProjectTool(server) {
+  server.tool("autopilot_read_reference",
+    "Read an exact original upstream Skill instruction or reference document. Only SKILL.md and references/*.md are exposed.",
+    {relative_path: z.string().max(240)},
+    async ({relative_path}) => tool(() => {
+      const rel = relative_path.replace(/\\\\/g, "/");
+      if (!(rel === "SKILL.md" || rel.startsWith("references/")) ||
+          rel.split("/").some(part => !part || part === "." || part === "..") ||
+          !rel.endsWith(".md")) throw new Error("Only SKILL.md or a references/*.md document can be read.");
+      const file = path.resolve(ROOT, rel);
+      if (!file.startsWith(path.resolve(ROOT) + path.sep) && rel !== "SKILL.md") throw new Error("Reference path escaped upstream root.");
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > 600000) throw new Error("Reference is missing or too large.");
+      return {source: "kaomei/stickman-video-director@" + UPSTREAM_COMMIT, path: rel, content: fs.readFileSync(file, "utf8")};
+    })
+  );
   server.tool("autopilot_doctor",
     "Check the original Stickman Video Director Autopilot runtime installed on the server. Does not generate media.",
     {style: z.enum(STYLES).optional()},
@@ -259,7 +274,8 @@ function addProjectTool(server) {
           try { checkpoint = {...(checkpoint || {}), [candidate]: JSON.parse(fs.readFileSync(p, "utf8"))}; } catch {}
         }
       }
-      return {project_id, style: manifest.style, ratio: manifest.width + ":" + manifest.height,
+      return {project_id, style: manifest.style, width: manifest.width, height: manifest.height,
+        ratio: manifest.width > manifest.height ? "16:9" : "9:16",
         files, checkpoint, storage_note: "Render Free storage is ephemeral; download completed files promptly."};
     })
   );
@@ -319,7 +335,18 @@ function addProjectTool(server) {
           throw new Error("B5 arguments must use project-relative paths; absolute paths, URLs and parent traversal are blocked.");
         }
       }
-      const args = [input.command, projectDir(input.project_id), ...input.arguments];
+      const pathFlags = new Set(["--output", "--frames-dir", "--audio", "--plan-lock", "--previous",
+        "--candidate-dir", "--evidence-dir", "--review", "--png-evidence", "--image-first-read",
+        "--image-first-seal", "--png-review", "--png-revision", "--previous-evidence",
+        "--previous-first-read", "--previous-seal", "--previous-review", "--preview-ready"]);
+      const mapped = input.arguments.map((arg, i, all) => {
+        if (i > 0 && pathFlags.has(all[i - 1])) {
+          const existing = safeFile(input.project_id, arg);
+          return existing;
+        }
+        return arg;
+      });
+      const args = [input.command, projectDir(input.project_id), ...mapped];
       return startJob(input.project_id, "B5 " + input.command, B5_CLI, args);
     })
   );
