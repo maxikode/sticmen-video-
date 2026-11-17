@@ -109,7 +109,8 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(temp, file);
 }
 function startJob(projectId, label, script, args) {
-  const dir = projectDir(projectId);
+  projectDir(projectId);
+  if (activeJobs.size > 0) throw new Error("Only one rendering/generation task may run at a time on this instance.");
   for (const [id, child] of activeJobs) {
     if (child.projectId === projectId) throw new Error("A task is already running for this project: " + id);
   }
@@ -501,8 +502,16 @@ const httpServer = http.createServer(async (req, res) => {
     if (req.method !== "POST") { json(res, 405, {error: "MCP endpoint accepts POST requests"}); return; }
     try {
       const body = await readBody(req);
+      if (!req.headers.accept) {
+        req.headers.accept = "application/json, text/event-stream";
+        req.rawHeaders.push("Accept", "application/json, text/event-stream");
+      }
       const transport = new StreamableHTTPServerTransport({sessionIdGenerator: undefined, enableJsonResponse: true});
       const mcp = makeMcpServer();
+      res.on("close", () => {
+        void transport.close();
+        void mcp.close();
+      });
       await mcp.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch (error) {
