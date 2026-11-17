@@ -272,30 +272,32 @@ function addProjectTool(server) {
     })
   );
   server.tool("autopilot_read_file",
-    "Read a project text/JSON file or return a small image for visual inspection. Large media files should use autopilot_download_link.",
-    {project_id: z.string(), relative_path: z.string()},
-    async ({project_id, relative_path}) => {
+    "Read a project file or B5 external output. Small images are returned for visual inspection; large files use signed download links.",
+    {project_id: z.string(), relative_path: z.string(), area: z.enum(["project", "b5_output"]).default("project")},
+    async ({project_id, relative_path, area}) => {
       try {
-        const file = safeFile(project_id, relative_path, true);
+        const file = area === "b5_output"
+          ? safeOutputFile(project_id, relative_path, true)
+          : safeFile(project_id, relative_path, true);
         const stat = fs.statSync(file);
         const ext = path.extname(file).toLowerCase();
-        if (stat.size > 2 * 1024 * 1024) return textResult({file: relative_path, bytes: stat.size,
-          download_url: signedUrl(project_id, relative_path), note: "File is too large to embed in a tool response."});
+        if (stat.size > 2 * 1024 * 1024) return textResult({file: relative_path, area, bytes: stat.size,
+          download_url: signedUrl(project_id, relative_path, area), note: "File is too large to embed in a tool response."});
         if ([".png", ".jpg", ".jpeg", ".webp"].includes(ext)) {
           const mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
           return {content: [{type: "image", data: fs.readFileSync(file).toString("base64"), mimeType}]};
         }
         if ([".json", ".txt", ".md", ".srt", ".vtt", ".log"].includes(ext)) {
-          return textResult({file: relative_path, content: fs.readFileSync(file, "utf8")});
+          return textResult({file: relative_path, area, content: fs.readFileSync(file, "utf8")});
         }
-        return textResult({file: relative_path, bytes: stat.size, download_url: signedUrl(project_id, relative_path)});
+        return textResult({file: relative_path, area, bytes: stat.size, download_url: signedUrl(project_id, relative_path, area)});
       } catch (error) { return errorResult(error); }
     }
   );
   server.tool("autopilot_list_files",
-    "List project files and sizes, including generated output files but excluding private job logs.",
-    {project_id: z.string()},
-    async ({project_id}) => tool(() => collectFiles(projectDir(project_id)))
+    "List files in a project or its dedicated B5 output workspace.",
+    {project_id: z.string(), area: z.enum(["project", "b5_output"]).default("project")},
+    async ({project_id, area}) => tool(() => collectFiles(area === "b5_output" ? b5OutputDir(project_id) : projectDir(project_id)))
   );
   server.tool("autopilot_project_status",
     "Summarize a project's current manifest, checkpoint and available output files.",
@@ -363,7 +365,7 @@ function addProjectTool(server) {
     })
   );
   server.tool("autopilot_run_b5",
-    "Run the original dedicated B5 Character Explainer route. It executes project-local scene code, so trusted_code_authorized must be true after code inspection.",
+    "Run the original dedicated B5 Character Explainer route. Path arguments must use @project/path or @output/path. It executes project-local scene code, so trusted_code_authorized must be true after code inspection.",
     {project_id: z.string(),
       command: z.enum(["validate", "frames", "encode", "reference-study", "plan-lock", "png-review-pack",
         "png-first-read-seal", "png-review-check", "png-revision-review-pack", "review-pack", "preview-ready", "accept"]),
@@ -371,23 +373,38 @@ function addProjectTool(server) {
       trusted_code_authorized: z.boolean().default(false)},
     async (input) => tool(() => {
       if (!input.trusted_code_authorized) throw new Error("B5 runs authored local scene code. Inspect it and obtain explicit user authorization first.");
-      for (const arg of input.arguments) {
-        if (arg.includes("\0") || path.isAbsolute(arg) || arg.split(/[\\/]/).includes("..") || /^[a-z]+:\/\//i.test(arg)) {
-          throw new Error("B5 arguments must use project-relative paths; absolute paths, URLs and parent traversal are blocked.");
-        }
-      }
       const pathFlags = new Set(["--output", "--frames-dir", "--audio", "--plan-lock", "--previous",
         "--candidate-dir", "--evidence-dir", "--review", "--png-evidence", "--image-first-read",
         "--image-first-seal", "--png-review", "--png-revision", "--previous-evidence",
-        "--previous-first-read", "--previous-seal", "--previous-review", "--preview-ready"]);
-      const mapped = input.arguments.map((arg, i, all) => {
-        if (i > 0 && pathFlags.has(all[i - 1])) {
-          const existing = safeFile(input.project_id, arg);
-          return existing;
+        "--previous-first-read", "--previous-seal", "--previous-review", "--preview-ready",
+        "--diagnostic-masks"]);
+      const outputFlags = new Set(["--output"]);
+      const mapped = [];
+      for (let i = 0; i < input.arguments.length; i++) {
+        const arg = input.arguments[i];
+        if (arg.includes("\0") || /^[a-z]+:\/\//i.test(arg)) throw new Error("URLs and NUL bytes are not accepted in B5 arguments.");
+        if (pathFlags.has(arg)) {
+          const raw = input.arguments[++i];
+          if (!raw) throw new Error("Missing value for B5 path argument " + arg);
+          let resolved;
+          if (raw.startsWith("@project/")) {
+            if (outputFlags.has(arg)) throw new Error("--output must use @output/path, not @project/path.");
+            resolved = safeFile(input.project_id, raw.slice("@project/".length), !outputFlags.has(arg));
+          } else if (raw.startsWith("@output/")) {
+            resolved = safeOutputFile(input.project_id, raw.slice("@output/".length), !outputFlags.has(arg));
+          } else {
+            throw new Error("B5 path values must begin with @project/ or @output/.");
+          }
+          mapped.push(arg, resolved);
+        } else {
+          if (path.isAbsolute(arg) || arg.split(/[\\/]/).includes("..")) {
+            throw new Error("Absolute paths and parent traversal are blocked in B5 arguments.");
+          }
+          mapped.push(arg);
         }
-        return arg;
-      });
+      }
       const args = [input.command, projectDir(input.project_id), ...mapped];
+      if (!mapped.includes("--trusted-code")) args.push("--trusted-code");
       return startJob(input.project_id, "B5 " + input.command, B5_CLI, args);
     })
   );
@@ -435,13 +452,15 @@ function addProjectTool(server) {
     })
   );
   server.tool("autopilot_download_link",
-    "Create a short-lived download link for an existing project output or media file.",
-    {project_id: z.string(), relative_path: z.string()},
-    async ({project_id, relative_path}) => tool(() => {
-      const file = safeFile(project_id, relative_path, true);
+    "Create a short-lived signed download link for a project file or a B5 output file.",
+    {project_id: z.string(), relative_path: z.string(), area: z.enum(["project", "b5_output"]).default("project")},
+    async ({project_id, relative_path, area}) => tool(() => {
+      const file = area === "b5_output"
+        ? safeOutputFile(project_id, relative_path, true)
+        : safeFile(project_id, relative_path, true);
       const stat = fs.statSync(file);
-      return {file: relative_path, bytes: stat.size, expires_in_seconds: 1800,
-        download_url: signedUrl(project_id, relative_path)};
+      return {file: relative_path, area, bytes: stat.size, expires_in_seconds: 1800,
+        download_url: signedUrl(project_id, relative_path, area)};
     })
   );
 }
@@ -518,10 +537,13 @@ const httpServer = http.createServer(async (req, res) => {
     try {
       const id = url.pathname.split("/")[2];
       const relative = url.searchParams.get("file") || "";
+      const area = url.searchParams.get("area") || "project";
       const expires = url.searchParams.get("expires") || "";
       const sig = url.searchParams.get("sig") || "";
-      if (!verifyDownload(id, relative, expires, sig)) { json(res, 403, {error: "Invalid or expired download link"}); return; }
-      const file = safeFile(id, relative, true);
+      if (!verifyDownload(id, relative, area, expires, sig)) { json(res, 403, {error: "Invalid or expired download link"}); return; }
+      const file = area === "b5_output"
+        ? safeOutputFile(id, relative, true)
+        : safeFile(id, relative, true);
       res.writeHead(200, {"content-type": mimeFor(file), "content-length": fs.statSync(file).size,
         "content-disposition": "attachment; filename=\"" + path.basename(file).replace(/["\\]/g, "") + "\"",
         "cache-control": "private, no-store"});
