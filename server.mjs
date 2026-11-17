@@ -318,7 +318,8 @@ function addProjectTool(server) {
       }
       return {project_id, style: manifest.style, width: manifest.width, height: manifest.height,
         ratio: manifest.width > manifest.height ? "16:9" : "9:16",
-        files, checkpoint, storage_note: "Render Free storage is ephemeral; download completed files promptly."};
+        files, ...(manifest.style === "B5" ? {b5_output_files: collectFiles(b5OutputDir(project_id))} : {}),
+        checkpoint, storage_note: "Render Free storage is ephemeral; download completed files promptly."};
     })
   );
   server.tool("autopilot_run_stage",
@@ -470,7 +471,7 @@ function addReferenceTool(server) {
     "Read an original Stickman Video Director reference, workflow guide, example manifest or source script from the pinned upstream installation. Use the style-specific production and QA documents before authoring a project.",
     {relative_path: z.string().min(1).max(240)},
     async ({relative_path}) => tool(() => {
-      const normalized = relative_path.replace(/\\\\/g, "/");
+      const normalized = relative_path.replaceAll("\\", "/");
       const allowedRoots = ["references/", "examples/", "scripts/", "tests/"];
       if (!allowedRoots.some(root => normalized.startsWith(root)) ||
           normalized.split("/").some(part => !part || part === "." || part === "..")) {
