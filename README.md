@@ -1,59 +1,57 @@
-# Stickman Video Director — ChatGPT bridge
+# Stickman Video Director — ChatGPT integration
 
-This repository runs the **original** open-source Stickman Video Director Autopilot runtime from upstream commit `d58cf5b1d83996bc961694f046335454de599770`, with a small authenticated MCP bridge so ChatGPT can use the project's real CLI.
+This repository hosts a small MCP bridge to the **original** open-source Stickman Video Director Autopilot. It does not replace the upstream renderer with a homemade video generator.
 
-Upstream project: https://github.com/kaomei/stickman-video-director  
-License: MIT. The upstream license is included in the Docker image at `/opt/stickman-video-director/LICENSE`.
+- Upstream: https://github.com/kaomei/stickman-video-director
+- Pinned upstream commit: `d58cf5b1d83996bc961694f046335454de599770`
+- Upstream license: MIT; the Docker image includes the original `LICENSE`.
 
-## What this changes
+## How it works
 
-- The old procedural Pillow renderer is no longer the active service.
-- Render builds a pinned copy of the original Skill runtime and its original scripts/assets.
-- The service exposes original Autopilot workflow, doctor, initialization, validation, preview, approval, rendering, B5 route, optional Gemini media adapter, project files and download links as MCP tools.
-- No original renderer is reimplemented or silently replaced.
+1. Render builds the pinned upstream Skill runtime and its original scripts/assets.
+2. The MCP bridge exposes the original workflow, documentation, project initialization, file management, validation, preview, review and rendering stages to ChatGPT.
+3. ChatGPT acts as the director/author: it researches when needed, writes the script and scene plan, prepares project manifests and assets, and calls the original runtime for validation and rendering.
+4. The original production gates remain in place. A preview is not approval; a full render requires the user's explicit authorization and the original style-specific review/approval artifacts.
 
-## ChatGPT connection
+The original Autopilot is **not a text-to-video model by itself**. It renders project files prepared by the agent. Narration and illustrations must be supplied, generated with a currently available ChatGPT tool, or generated through a configured provider. The optional original Gemini adapter needs `GEMINI_API_KEY` and may incur provider charges; it is never called without explicit authorization.
 
-The MCP endpoint is private and uses a secret path token. In Render, add:
+## ChatGPT plugin connection
 
-- `MCP_PATH_TOKEN`: a long random token (keep it private; do not commit it).
-- `PUBLIC_BASE_URL`: the public Render service URL.
-- `GEMINI_API_KEY`: optional. Only needed if you choose the original optional Gemini image/speech adapter.
+The private `stickman-video-studio` plugin connects to:
 
-The private ChatGPT plugin package should point to:
+`https://sticmen-video.onrender.com/mcp/<private-path-token>`
 
-```
-https://sticmen-video.onrender.com/mcp/<MCP_PATH_TOKEN>
-```
+The path token is configured in the private Render blueprint and in the private plugin's `mcp.json`. Keep both the GitHub repository and plugin private. Do not paste or publish the token. If you rotate it, update the Render environment and plugin endpoint together.
 
-Do not share the plugin or token publicly. The plugin is a tool bridge; ChatGPT still directs the story, prepares project files and follows the original sample-review/approval gates.
+## MCP tools
 
-## Main MCP tools
+- `autopilot_doctor` — inspect installed runtime dependencies.
+- `autopilot_workflow` and `autopilot_read_reference` — read original style workflow and source references.
+- `autopilot_init` — create an isolated project with the original initializer.
+- `autopilot_write_file`, `autopilot_read_file`, `autopilot_list_files`, `autopilot_project_status` — manage project files and inspect results.
+- `autopilot_run_stage` — run original B1–B4/B6 validation, preview, approval, rendering and review stages.
+- `autopilot_run_b5` — use the dedicated original B5 Character Explainer route.
+- `autopilot_generate_media` — optional single-request original Gemini image/speech adapter; requires a configured key and explicit authorization.
+- `autopilot_job_status` and `autopilot_download_link` — track asynchronous work and retrieve output files.
 
-- `autopilot_doctor`, `autopilot_workflow`, `autopilot_init`
-- `autopilot_write_file`, `autopilot_read_file`, `autopilot_list_files`, `autopilot_project_status`
-- `autopilot_run_stage` for validate, preview, approve, render and review stages
-- `autopilot_run_b5` for the dedicated B5 route
-- `autopilot_generate_media` for the optional one-request Gemini adapter
-- `autopilot_job_status`, `autopilot_download_link`
-
-The API never runs arbitrary shell commands. Executable project files and B5/B6 code require an explicit trusted-code flag. Preview and full rendering are separate stages; approval is not inferred from a successful render.
+The bridge does not expose arbitrary shell execution. Executable project code is guarded by an explicit trusted-code flag. B5 and B6 have their own code-authored workflows and are not silently treated as B1–B4 projects.
 
 ## Deployment
 
-The repository uses the Dockerfile. Render installs Node 20, FFmpeg/FFprobe and the original runtime dependencies, then starts `server.mjs`.
+Render uses the Dockerfile and installs Node 22, FFmpeg/FFprobe, Python dependencies and the pinned upstream runtime. The health endpoint is:
 
-After deploying, check:
+`https://sticmen-video.onrender.com/health`
 
-- `/health` — bridge/runtime status
-- `/mcp/<MCP_PATH_TOKEN>` — private MCP endpoint (ChatGPT plugin connection)
+The `/mcp/<private-path-token>` endpoint is intended for the private ChatGPT plugin only.
 
-## Important Render Free limitations
+## Render Free limitations
 
-Free web services spin down after 15 minutes without inbound traffic, and their local filesystem is ephemeral: project files and generated videos can disappear after spin-down, restart or redeploy. Free instances also have only 512 MB RAM. This is suitable for a limited test, not a reliable multi-stage production workflow. For dependable preview → review → approval → full render, use a paid service with a persistent disk mounted at `/var/data`, then set `PROJECTS_DIR=/var/data/stickman-projects`.
+Free web services sleep after 15 minutes without inbound traffic and use ephemeral storage. Project files and generated videos can be lost after a restart, sleep or redeploy. Free instances also have only 512 MB RAM. This is suitable for a small proof-of-concept, not reliable long-form production. A paid instance with persistent storage is recommended for multi-stage projects; set `PROJECTS_DIR` to the persistent disk mount, for example `/var/data/stickman-projects`.
 
-The full upstream Skill assets are large. The build uses sparse checkout to exclude unrelated repository demos/docs, but retains the original Autopilot Skill assets and scripts. Rendering can still exceed free-instance memory/time limits depending on style, duration and resolution.
+The original Skill's assets are large. The Docker build uses sparse checkout to omit unrelated repository demos and docs while retaining the original Autopilot scripts and assets. Render time and memory still depend on style, duration, resolution and scene complexity.
 
-## Generation and cost
+## Privacy and cost
 
-The original project is a production workflow, not a text-to-video model by itself. ChatGPT authors the script/scene direction and prepares the manifest; the original runtime validates and renders it. Narration and illustrations must come from files you provide, a configured generation tool, or a selected provider. The optional bundled Gemini adapter requires a configured API key and may incur provider charges. No API call is made automatically without explicit authorization.
+Project files are stored on the Render service filesystem and are not written back to GitHub. The service is private by an unguessable MCP path, but any person who obtains that path can call the bridge. Download links are signed and expire after 30 minutes. Do not upload private material unless you are comfortable processing it on the hosting service.
+
+The upstream project is open source; image/TTS providers and hosting are separate services with their own terms and possible costs. No paid generation call is made automatically.
