@@ -10,7 +10,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 ARG UPSTREAM_COMMIT=d58cf5b1d83996bc961694f046335454de599770
-RUN git clone --filter=blob:none --no-checkout https://github.com/kaomei/stickman-video-director.git /opt/stickman-video-director \
+RUN git clone --filter=blob:none --no-checkout --depth 1 https://github.com/kaomei/stickman-video-director.git /opt/stickman-video-director \
     && cd /opt/stickman-video-director \
     && git sparse-checkout init --cone \
     && git sparse-checkout set skills/directing-stickman-videos \
@@ -22,6 +22,7 @@ RUN npm ci --omit=dev
 
 WORKDIR /app
 COPY server.mjs ./
+RUN node --check /app/server.mjs
 ENV AUTOPILOT_ROOT=/opt/stickman-video-director/skills/directing-stickman-videos
 EXPOSE 10000
 CMD ["node", "server.mjs"]
