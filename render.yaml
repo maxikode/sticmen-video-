@@ -8,7 +8,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: MCP_PATH_TOKEN
-        sync: false
+        value: d1f6a354f28706d1f45d7520e19855b3a216973690b0f3a7558522b1443190ef
       - key: PUBLIC_BASE_URL
         value: https://sticmen-video.onrender.com
       - key: PROJECTS_DIR
