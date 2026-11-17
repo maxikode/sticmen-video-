@@ -71,6 +71,38 @@ function projectDir(id) {
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error("Project not found");
   return dir;
 }
+
+function b5OutputDir(id) {
+  const dir = path.resolve(PROJECTS, ".b5-output", validId(id));
+  const root = path.resolve(PROJECTS, ".b5-output");
+  if (!dir.startsWith(root + path.sep)) throw new Error("B5 output path escaped storage root");
+  fs.mkdirSync(dir, {recursive: true});
+  return dir;
+}
+function safeOutputFile(id, relative, mustExist = false) {
+  const base = b5OutputDir(id);
+  if (typeof relative !== "string" || !relative || path.isAbsolute(relative) || relative.includes("\0")) {
+    throw new Error("Use an output-relative file path");
+  }
+  const normalized = relative.replace(/\\/g, "/");
+  if (normalized.split("/").some(part => !part || part === "." || part === "..")) throw new Error("Invalid relative output path");
+  const target = path.resolve(base, normalized);
+  if (!target.startsWith(base + path.sep)) throw new Error("Output path escaped its storage root");
+  if (mustExist) {
+    const real = fs.realpathSync(target);
+    if (!real.startsWith(fs.realpathSync(base) + path.sep)) throw new Error("Output symlink escaped its storage root");
+    if (!fs.statSync(real).isFile()) throw new Error("Not a regular output file");
+    return real;
+  }
+  let parent = path.dirname(target);
+  while (parent.startsWith(base) && !fs.existsSync(parent)) parent = path.dirname(parent);
+  if (!parent.startsWith(base) || !fs.realpathSync(parent).startsWith(fs.realpathSync(base))) {
+    throw new Error("Output parent directory escaped its storage root");
+  }
+  if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new Error("Refusing to follow an output symbolic link.");
+  return target;
+}
+
 function safeFile(id, relative, mustExist = false) {
   const base = projectDir(id);
   if (typeof relative !== "string" || !relative || path.isAbsolute(relative) || relative.includes("\0")) {
@@ -142,18 +174,19 @@ function startJob(projectId, label, script, args) {
   return {job_id: id, project_id: projectId, stage: label, status: "running",
     message: "Task started. Poll autopilot_job_status until it completes."};
 }
-function signedUrl(projectId, relative) {
+function signedUrl(projectId, relative, area = "project") {
   const expires = Date.now() + 30 * 60 * 1000;
-  const payload = projectId + "\n" + relative + "\n" + expires;
+  const payload = area + "\n" + projectId + "\n" + relative + "\n" + expires;
   const sig = crypto.createHmac("sha256", TOKEN).update(payload).digest("hex");
-  return BASE_URL + "/download/" + projectId + "?file=" + encodeURIComponent(relative) +
+  return BASE_URL + "/download/" + projectId + "?area=" + area + "&file=" + encodeURIComponent(relative) +
     "&expires=" + expires + "&sig=" + sig;
 }
-function verifyDownload(projectId, relative, expires, sig) {
-  if (!TOKEN || !/^\d+$/.test(String(expires)) || Number(expires) < Date.now() ||
+function verifyDownload(projectId, relative, area, expires, sig) {
+  if (!TOKEN || !["project", "b5_output"].includes(area) ||
+      !/^\d+$/.test(String(expires)) || Number(expires) < Date.now() ||
       Number(expires) > Date.now() + 31 * 60 * 1000) return false;
   const expected = crypto.createHmac("sha256", TOKEN)
-    .update(projectId + "\n" + relative + "\n" + expires).digest("hex");
+    .update(area + "\n" + projectId + "\n" + relative + "\n" + expires).digest("hex");
   return safeEqual(expected, sig);
 }
 function collectFiles(base, relative = "", out = []) {
