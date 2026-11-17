@@ -195,11 +195,13 @@ function addProjectTool(server) {
   );
   server.tool("autopilot_init",
     "Create a new isolated project using the original Autopilot initializer. B5 has its own route; B1-B4 and B6 use their original initializers.",
-    {style: z.enum(STYLES), ratio: z.enum(["16:9", "9:16"]).optional()},
+    {style: z.enum(STYLES), ratio: z.enum(["16:9", "9:16", "both"]).optional()},
     async ({style, ratio}) => tool(() => {
       const id = crypto.randomUUID();
       const dir = path.join(PROJECTS, id);
       const args = ["init", dir, "--style", style];
+      if (style === "B6" && !ratio) throw new Error("B6 initialization requires a native ratio: 16:9, 9:16 or both.");
+      if (style !== "B6" && ratio === "both") throw new Error("The both-ratios option is supported only by B6.");
       if (ratio && style !== "B5") args.push("--ratio", ratio);
       if (style === "B5" && ratio) throw new Error("B5 uses its dedicated native scene route and does not accept --ratio during init.");
       const result = runSync(CLI, args);
@@ -223,6 +225,7 @@ function addProjectTool(server) {
         throw new Error("Executable project code requires trusted_code_authorized=true after you have reviewed and accepted that code.");
       }
       const target = safeFile(project_id, relative_path);
+      if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new Error("Refusing to write through a symbolic link.");
       if (fs.existsSync(target) && !overwrite) throw new Error("File already exists; set overwrite=true to replace it.");
       const bytes = encoding === "base64" ? Buffer.from(content, "base64") : Buffer.from(content, "utf8");
       if (encoding === "base64" && bytes.toString("base64").replace(/=+$/, "") !== content.replace(/=+$/, "")) {
@@ -300,6 +303,7 @@ function addProjectTool(server) {
       const {project_id, stage} = input;
       const dir = projectDir(project_id);
       const manifest = readProject(project_id);
+      if (manifest.style === "B5") throw new Error("B5 uses its dedicated route. Call autopilot_run_b5 instead of autopilot_run_stage.");
       const projectArg = manifest.style === "B6" ? dir : path.join(dir, "project.json");
       const args = [stage, projectArg];
       if (stage === "preview") args.push("--seconds", String(input.seconds || 10));
@@ -408,8 +412,40 @@ function addProjectTool(server) {
   );
 }
 
+function addReferenceTool(server) {
+  server.tool("autopilot_read_reference",
+    "Read an original Stickman Video Director reference, workflow guide, example manifest or source script from the pinned upstream installation. Use the style-specific production and QA documents before authoring a project.",
+    {relative_path: z.string().min(1).max(240)},
+    async ({relative_path}) => tool(() => {
+      const normalized = relative_path.replace(/\\\\/g, "/");
+      const allowedRoots = ["references/", "examples/", "scripts/", "tests/"];
+      if (!allowedRoots.some(root => normalized.startsWith(root)) ||
+          normalized.split("/").some(part => !part || part === "." || part === "..")) {
+        throw new Error("Only files under the installed references/, examples/, scripts/ or tests/ directories can be read.");
+      }
+      const target = path.resolve(ROOT, normalized);
+      if (!target.startsWith(ROOT + path.sep)) throw new Error("Reference path escaped the installed project.");
+      const real = fs.realpathSync(target);
+      if (!real.startsWith(fs.realpathSync(ROOT) + path.sep) || !fs.statSync(real).isFile()) {
+        throw new Error("Reference file not found.");
+      }
+      const stat = fs.statSync(real);
+      if (stat.size > 120000) throw new Error("Reference is larger than 120 KB; read a narrower text reference.");
+      const ext = path.extname(real).toLowerCase();
+      if (![".md", ".json", ".mjs", ".js", ".py", ".txt"].includes(ext)) {
+        throw new Error("Only text-based reference files can be read through this tool.");
+      }
+      return {path: normalized, content: fs.readFileSync(real, "utf8")};
+    })
+  );
+}
+
 function makeMcpServer() {
-  const server = new McpServer({name: "stickman-video-director-chatgpt", version: "1.0.0"});
+  const server = new McpServer(
+    {name: "stickman-video-director-chatgpt", version: "1.1.0"},
+    {maxToolInputElements: 1000}
+  );
+  addReferenceTool(server);
   addProjectTool(server);
   return server;
 }
@@ -427,7 +463,7 @@ async function readBody(req, limit = 24 * 1024 * 1024) {
 function cors(res) {
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
-  res.setHeader("access-control-allow-headers", "content-type,mcp-session-id,mcp-protocol-version,last-event-id");
+  res.setHeader("access-control-allow-headers", "accept,content-type,mcp-session-id,mcp-protocol-version,last-event-id");
 }
 const httpServer = http.createServer(async (req, res) => {
   cors(res);
