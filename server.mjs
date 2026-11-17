@@ -265,7 +265,10 @@ function addProjectTool(server) {
     {project_id: z.string()},
     async ({project_id}) => tool(() => {
       const dir = projectDir(project_id);
-      const manifest = readProject(project_id);
+      let manifest;
+      const manifestPath = path.join(dir, "project.json");
+      if (fs.existsSync(manifestPath)) manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      else manifest = {style: fs.existsSync(path.join(dir, "scene", "config.json")) ? "B5" : "unknown"};
       const files = collectFiles(dir);
       let checkpoint = null;
       for (const candidate of ["output/checkpoint.json", "output/preview-report.json", "output/film-report.json"]) {
