@@ -21,7 +21,7 @@ The private `stickman-video-studio` plugin connects to:
 
 `https://sticmen-video.onrender.com/mcp/<private-path-token>`
 
-The path token is configured in the private Render blueprint and in the private plugin's `mcp.json`. Keep both the GitHub repository and plugin private. Do not paste or publish the token. If you rotate it, update the Render environment and plugin endpoint together.
+The path token must be stored only as the `MCP_PATH_TOKEN` secret in Render Environment settings and in the private plugin's `mcp.json`; it must never be committed to this repository. The token previously present in `render.yaml` has been rotated. Set the new value in Render and keep the plugin private. If you rotate it again, update Render and the plugin endpoint together.
 
 ## MCP tools
 
