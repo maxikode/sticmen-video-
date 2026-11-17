@@ -1,7 +1,17 @@
 services:
   - type: web
     name: stickman-video-renderer
-    runtime: python
+    runtime: docker
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: MCP_PATH_TOKEN
+        sync: false
+      - key: PUBLIC_BASE_URL
+        value: https://sticmen-video.onrender.com
+      - key: PROJECTS_DIR
+        value: /tmp/stickman-projects
+      - key: GEMINI_API_KEY
+        sync: false
